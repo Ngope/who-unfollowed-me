@@ -5,56 +5,96 @@ const fs = require('fs');
 const INSTAGRAM_URL = 'https://www.instagram.com';
 const USERNAME = process.env.INSTAGRAM_USERNAME;
 const PASSWORD = process.env.INSTAGRAM_PASSWORD;
-const TARGET_ACCOUNT = 'target_account_username'; // Replace with the target Instagram account
+const TARGET_ACCOUNT = 'peterson.ngo';
+
+async function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 (async () => {
-  const browser = await chromium.launch({ headless: false }); // Set headless to true to run in the background
+  const browser = await chromium.launch({ headless: false });
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  // Navigate to Instagram login page
-  await page.goto(`${INSTAGRAM_URL}/accounts/login/`);
+  try {
+    // Login
+    await page.goto(`${INSTAGRAM_URL}/accounts/login/`);
+    await page.fill('input[name="username"]', USERNAME);
+    await page.fill('input[name="password"]', PASSWORD);
+    await page.click('button[type="submit"]');
+    await page.waitForNavigation();
 
-  // Log in
-  await page.fill('input[name="username"]', USERNAME);
-  await page.fill('input[name="password"]', PASSWORD);
-  await page.click('button[type="submit"]');
+    // Navigate to target account
+    await page.goto(`${INSTAGRAM_URL}/${TARGET_ACCOUNT}`);
+    await delay(2000);
 
-  // Wait for navigation to complete after login
-  await page.waitForNavigation();
+    // Click followers link
+    const followersLink = await page.waitForSelector('a[href$="/followers/"]');
+    await followersLink.click();
+    await delay(3000);
 
-  // Navigate to the target profile page
-  await page.goto(`${INSTAGRAM_URL}/${TARGET_ACCOUNT}`);
+    // Wait for and verify modal is loaded
+    const modal = await page.waitForSelector('div[role="dialog"]', { timeout: 10000 });
+    if (!modal) {
+      throw new Error('Followers modal failed to load');
+    }
 
-  // Click on the followers link
-  await page.click('a[href$="/followers/"]');
+    let followers = new Set();
+    let previousFollowerCount = 0;
+    let noNewFollowersCount = 0;
 
-  // Wait for the followers modal to load
-  await page.waitForSelector('div[role="dialog"]');
+    while (noNewFollowersCount < 3) {
+      // Scroll the modal's scrollable container
+      await page.evaluate(() => {
+        const scrollableContainer = document.querySelector('div.xyi19xy.x1ccrb07.xtf3nb5.x1pc53ja.x1lliihq.x1iyjqo2.xs83m0k.xz65tgg.x1rife3k.x1n2onr6');
+        if (scrollableContainer) {
+          const currentScrollTop = scrollableContainer.scrollTop;
+          // Scroll down by a fixed amount each time
+          scrollableContainer.scrollTop += 800;
+        }
+      });
+      
+      // Increase delay to ensure content loads
+      await delay(3000);
 
-  // Scrape follower usernames
-  let followers = await page.evaluate(() => {
-    let followersList = [];
-    const followerElements = document.querySelectorAll('div[role="dialog"] ul li a');
+      // Get current followers with more detailed logging
+      const newFollowers = await page.evaluate(() => {
+        const links = Array.from(document.querySelectorAll('div[role="dialog"] a[role="link"]'));
+        const usernames = links
+          .map(link => {
+            const href = link.getAttribute('href');
+            if (href && href.startsWith('/') && !href.includes('hashtag') && !href.includes('explore')) {
+              return href.replace('/', '');
+            }
+            return null;
+          })
+          .filter(username => username !== null);
+        
+        return usernames;
+      });
 
-    followerElements.forEach(element => {
-      followersList.push(element.textContent);
-    });
+      const previousSize = followers.size;
+      newFollowers.forEach(follower => followers.add(follower));
+      
+      // Check if we got new followers
+      if (followers.size === previousFollowerCount) {
+        noNewFollowersCount++;
+        console.log(`No new followers found. Attempt ${noNewFollowersCount}/3`);
+      } else {
+        noNewFollowersCount = 0;
+      }
 
-    return followersList;
-  });
+      previousFollowerCount = followers.size;
+    }
 
-  console.log(`Followers of ${TARGET_ACCOUNT}:`, followers);
+    // Save results
+    const followersArray = Array.from(followers);
+    console.log(`Total followers fetched: ${followersArray.length}`);
+    fs.writeFileSync('followers.json', JSON.stringify(followersArray, null, 2));
 
-  // Save current followers to a file
-  fs.writeFileSync('followers.json', JSON.stringify(followers));
-
-  // Load previous followers from the file
-  let previousFollowers = fs.existsSync('followers.json') ? JSON.parse(fs.readFileSync('followers.json', 'utf-8')) : [];
-
-  // Find who recently unfollowed
-  let unfollowed = previousFollowers.filter(user => !followers.includes(user));
-  console.log('Recently unfollowed:', unfollowed);
-
-  await browser.close();
+  } catch (error) {
+    console.error('An error occurred:', error);
+  } finally {
+    await browser.close();
+  }
 })();
