@@ -5,16 +5,18 @@ const fs = require('fs');
 const INSTAGRAM_URL = 'https://www.instagram.com';
 const USERNAME = process.env.INSTAGRAM_USERNAME;
 const PASSWORD = process.env.INSTAGRAM_PASSWORD;
-const TARGET_ACCOUNT = 'peterson.ngo';
+let TARGET_ACCOUNT = 'peterson.ngo';
 
 async function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-(async () => {
+const getFollowers = async (targetAccount) => {
   const browser = await chromium.launch({ headless: false });
   const context = await browser.newContext();
   const page = await context.newPage();
+
+  TARGET_ACCOUNT = targetAccount;
 
   try {
     // Login
@@ -64,7 +66,7 @@ async function delay(ms) {
           .map(link => {
             const href = link.getAttribute('href');
             if (href && href.startsWith('/') && !href.includes('hashtag') && !href.includes('explore')) {
-              return href.replace('/', '');
+              return href.replace(/^\/|\/$/g, '');
             }
             return null;
           })
@@ -87,14 +89,19 @@ async function delay(ms) {
       previousFollowerCount = followers.size;
     }
 
-    // Save results
     const followersArray = Array.from(followers);
-    console.log(`Total followers fetched: ${followersArray.length}`);
-    fs.writeFileSync('followers.json', JSON.stringify(followersArray, null, 2));
+
+    return {
+      username: TARGET_ACCOUNT,
+      followers: followersArray,
+      followers_count: followersArray.length
+    }
 
   } catch (error) {
     console.error('An error occurred:', error);
   } finally {
     await browser.close();
   }
-})();
+};
+
+module.exports = { getFollowers };
